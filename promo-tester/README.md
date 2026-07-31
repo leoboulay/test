@@ -9,14 +9,37 @@ déménagement) sans coller manuellement des dizaines de codes.
 ## Ce que fait l'extension
 
 1. Vous ouvrez la page **panier / commande** du site.
-2. Vous cliquez sur **▶ Lancer la recherche**.
-3. L'extension :
+2. (Facultatif mais recommandé) vous cliquez sur **🔎 Trouver les codes du
+   site** : l'extension lit les codes déjà présents dans la page (bannières,
+   scripts, `dataLayer`, JSON de config…) et les ajoute **en tête** de la liste.
+3. Vous cliquez sur **▶ Lancer la recherche**.
+4. L'extension :
    - détecte le champ « code promo », le bouton « appliquer » et le montant total ;
    - saisit et applique chaque code de la liste, un par un ;
    - lit le nouveau total après chaque essai ;
    - mémorise le meilleur code (total le plus bas) trouvé jusque-là.
-4. À la fin de la liste **ou** dès que vous cliquez sur **■ Stopper**, elle
+5. À la fin de la liste **ou** dès que vous cliquez sur **■ Stopper**, elle
    **réapplique automatiquement le meilleur code** trouvé.
+
+## Trouver les codes du site (« console »)
+
+Le bouton **🔎 Trouver les codes du site** analyse **uniquement ce que le site
+a déjà envoyé à votre navigateur** :
+
+- le texte visible de la page (bannières « utilisez le code … ») ;
+- le HTML et les scripts en ligne ;
+- les objets globaux JS courants (`dataLayer`, `__NEXT_DATA__`, `__NUXT__`,
+  `__INITIAL_STATE__`, `__APOLLO_STATE__`…) ;
+- les scripts *same-origin* déjà chargés (relus depuis le cache).
+
+Les codes trouvés sont ceux qui ont le plus de chances d'être valides sur ce
+site précis, donc ils sont testés **en premier**. C'est ce que vous feriez à la
+main dans la console (F12) en fouillant les sources — automatisé.
+
+**Ce que ça ne fait pas** (et ne fera pas) : interroger le serveur pour
+« deviner » des codes (force brute, ça fait bannir), ni accéder à la base de
+données ou à une zone privée du site (ce serait de l'intrusion informatique,
+illégale). On lit vos propres données côté client, rien d'autre.
 
 ## Installation (mode développeur)
 

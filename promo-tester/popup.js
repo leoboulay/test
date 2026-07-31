@@ -115,6 +115,29 @@ $("startBtn").addEventListener("click", async () => {
   } catch (e) { $("statusText").textContent = e.message; }
 });
 $("stopBtn").addEventListener("click", () => send("stop").catch((e) => ($("statusText").textContent = e.message)));
+$("discoverBtn").addEventListener("click", async () => {
+  const btn = $("discoverBtn");
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = "🔎 Analyse en cours…";
+  try {
+    const res = await send("discover");
+    const found = res.codes || [];
+    if (!found.length) {
+      $("statusText").textContent = "Aucun code détecté dans le code de cette page.";
+    } else {
+      // les codes du site sont les plus prometteurs → en tête de liste
+      const merged = [...new Set([...found, ...parseCodes()])];
+      $("codes").value = merged.join("\n");
+      await savePrefs();
+      $("settings").open = true;
+      $("statusText").textContent = `${found.length} code(s) trouvé(s) sur le site, ajoutés en tête : ${found.slice(0, 5).join(", ")}${found.length > 5 ? "…" : ""}`;
+    }
+  } catch (e) {
+    $("statusText").textContent = e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+});
 $("pickFieldBtn").addEventListener("click", () => send("pickField").catch((e) => ($("statusText").textContent = e.message)));
 $("pickTotalBtn").addEventListener("click", () => send("pickTotal").catch((e) => ($("statusText").textContent = e.message)));
 $("detectBtn").addEventListener("click", () => send("detect").catch((e) => ($("statusText").textContent = e.message)));

@@ -282,6 +282,69 @@
     if (pickOverlayCleanup) { pickOverlayCleanup(); pickOverlayCleanup = null; }
   }
 
+  /* ---------- découverte des codes présents dans la page ----------
+   * On lit UNIQUEMENT ce que le site a déjà envoyé à ce navigateur : texte
+   * visible, HTML, scripts en ligne, objets globaux (dataLayer, __NEXT_DATA__…)
+   * et scripts same-origin déjà chargés. Aucune requête pour « deviner » des
+   * codes côté serveur, aucun accès à quoi que ce soit de privé.
+   */
+  const CODE_STOP = new Set([
+    "CODE", "PROMO", "COUPON", "VOUCHER", "DISCOUNT", "PROMOCODE", "COUPONCODE",
+    "NULL", "TRUE", "FALSE", "UNDEFINED", "TOTAL", "PRICE", "VALUE", "AMOUNT",
+    "EMAIL", "LOGIN", "PASSWORD", "SUBMIT", "BUTTON", "ERROR", "SUCCESS",
+    "FUNCTION", "RETURN", "STRING", "NUMBER", "OBJECT", "DEFAULT", "ENABLED",
+  ]);
+
+  function addCandidate(out, raw) {
+    if (!raw) return;
+    let c = raw.trim().toUpperCase();
+    if (c.length < 3 || c.length > 22) return;
+    if (!/[A-Z]/.test(c)) return;                 // au moins une lettre
+    if (!/^[A-Z0-9][A-Z0-9._-]*$/.test(c)) return;
+    if (CODE_STOP.has(c)) return;
+    // doit ressembler à un code : chiffre présent, OU tout en capitales (>=4)
+    const looksCode = /\d/.test(c) || (raw === raw.toUpperCase() && c.length >= 4);
+    if (!looksCode) return;
+    out.add(c);
+  }
+
+  function scanText(text, out) {
+    if (!text || out.size > 400) return;
+    // 1) mot-clé de contexte suivi d'un token (« code: SUMMER20 », « coupon=WELCOME10 »)
+    const ctx = /(?:code(?:\s*promo)?|coupon|voucher|promo(?:tion)?|rabais|r[ée]duc\w*|bon\s*(?:de|d')?\s*r[ée]duc\w*|discount|use\s*code|utilisez?[^.<>{}]{0,15}code)[\s:="'>\]\-]{0,8}([A-Za-z0-9][A-Za-z0-9._-]{2,21})/gi;
+    let m;
+    while ((m = ctx.exec(text)) && out.size <= 400) addCandidate(out, m[1]);
+    // 2) clés JSON de type coupon/promo/voucher/discount
+    const key = /"[a-z_]*(?:coupon|promo|voucher|discount|rabais)[a-z_]*(?:code|_code)?"\s*:\s*"([A-Za-z0-9._-]{3,21})"/gi;
+    while ((m = key.exec(text)) && out.size <= 400) addCandidate(out, m[1]);
+  }
+
+  async function collectSiteCodes() {
+    const out = new Set();
+    // texte visible + HTML complet
+    try { scanText(document.body.innerText, out); } catch (e) {}
+    try { scanText(document.documentElement.outerHTML, out); } catch (e) {}
+    // objets globaux fréquents
+    for (const k of ["dataLayer", "__NEXT_DATA__", "__NUXT__", "__INITIAL_STATE__", "__APOLLO_STATE__", "__PRELOADED_STATE__"]) {
+      try { if (window[k]) scanText(JSON.stringify(window[k]), out); } catch (e) {}
+    }
+    // scripts en ligne
+    try { for (const s of document.scripts) if (!s.src && s.textContent) scanText(s.textContent, out); } catch (e) {}
+    // scripts same-origin déjà chargés (relecture depuis le cache, best effort)
+    try {
+      const urls = [...document.scripts].map((s) => s.src).filter(Boolean).filter((u) => {
+        try { return new URL(u, location.href).origin === location.origin; } catch (e) { return false; }
+      }).slice(0, 8);
+      await Promise.all(urls.map(async (u) => {
+        try {
+          const r = await fetch(u, { credentials: "omit" });
+          if (r.ok) scanText(await r.text(), out);
+        } catch (e) {}
+      }));
+    } catch (e) {}
+    return [...out];
+  }
+
   /* ---------- messagerie avec le popup ---------- */
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -314,6 +377,10 @@
         startPicking("total");
         sendResponse({ ok: true });
         break;
+      case "discover":
+        collectSiteCodes().then((codes) => sendResponse({ ok: true, codes }))
+          .catch(() => sendResponse({ ok: true, codes: [] }));
+        return true;   // réponse asynchrone
       case "detect": {
         const f = findField(), t = findTotal();
         sendResponse({ ok: true, field: !!f, total: !!t, totalValue: readTotal() });
