@@ -11,6 +11,8 @@
   const FIELD_RE = /(promo|coupon|voucher|discount|gift[\s-]?card|code|rabais|r[ée]duc|bon|cadeau)/i;
   const APPLY_RE = /(appliquer|valider|utiliser|ajouter|ok|apply|redeem|submit|add|use|activer)/i;
   const TOTAL_RE = /(total|à\s*payer|a\s*payer|montant|net\s*à\s*payer|order\s*total|grand\s*total|amount\s*due|sous[\s-]?total|subtotal)/i;
+  // déclencheur qui déplie/ouvre le champ code promo (accordéon, modale…)
+  const OPENER_RE = /((ajouter|saisir|entrer|utiliser|renseigner|j['e]?\s*ai|avez[\s-]?vous)[^]{0,20}code|code\s*(promo|avantage|cadeau|de\s*r[ée]duction)|bon\s*de\s*r[ée]duc\w*|promo\s*code|coupon|voucher)/i;
 
   const state = {
     running: false,
@@ -26,10 +28,11 @@
     field: null,
     applyBtn: null,
     totalEl: null,
+    opener: null,            // déclencheur « Ajouter un code promo » (panneau repliable)
     error: "",
   };
 
-  let picking = null;         // "field" | "total" | null
+  let picking = null;         // "field" | "total" | "opener" | null
   let pickOverlayCleanup = null;
 
   /* ---------- utilitaires ---------- */
@@ -112,6 +115,41 @@
     return state.applyBtn;
   }
 
+  // Déclencheur qui déplie le champ code promo (ex. « Ajouter un code promo »).
+  function findOpener() {
+    if (state.opener && document.contains(state.opener) && isVisible(state.opener)) return state.opener;
+    const clickables = [...document.querySelectorAll(
+      "button, a, summary, label, [role=button], [aria-controls], [aria-expanded]"
+    )];
+    const hit = clickables.find((el) => {
+      if (!isVisible(el) || el === state.applyBtn) return false;
+      const txt = (el.textContent || "").trim();
+      if (!txt || txt.length > 45) return false;
+      // on veut le lien/bouton qui OUVRE, pas un champ ni le bouton « Appliquer »
+      if (APPLY_RE.test(txt) && !OPENER_RE.test(txt)) return false;
+      return OPENER_RE.test(txt) || OPENER_RE.test(attrsOf(el));
+    });
+    state.opener = hit || null;
+    return state.opener;
+  }
+
+  // Garantit que le champ est présent et visible : rouvre le panneau si besoin.
+  async function ensureFieldReady() {
+    let field = findField();
+    if (field && isVisible(field)) return field;
+    const opener = findOpener();
+    if (opener) {
+      try { opener.click(); } catch (e) {}
+      for (let i = 0; i < 15; i++) {
+        await sleep(120);
+        state.field = null;            // force une nouvelle recherche
+        field = findField();
+        if (field && isVisible(field)) return field;
+      }
+    }
+    return findField();
+  }
+
   function findTotal() {
     if (state.totalEl && document.contains(state.totalEl)) return state.totalEl;
     const candidates = [];
@@ -154,7 +192,7 @@
   }
 
   async function applyCode(code) {
-    const field = findField();
+    const field = await ensureFieldReady();
     if (!field) throw new Error("no-field");
     field.focus();
     setNativeValue(field, "");
@@ -194,8 +232,8 @@
 
   async function run() {
     state.error = "";
-    const field = findField();
-    if (!field) { fail("Champ « code promo » introuvable. Ouvrez la page panier, ou sélectionnez le champ manuellement."); return; }
+    const field = await ensureFieldReady();
+    if (!field) { fail("Champ « code promo » introuvable. Ouvrez le panneau code promo, ou sélectionnez le champ / le bouton d'ouverture manuellement."); return; }
     if (!findTotal()) { fail("Total introuvable. Sélectionnez le total manuellement (bouton dans l'extension)."); return; }
 
     state.baseline = readTotal();
@@ -263,6 +301,7 @@
     const onClick = (e) => {
       e.preventDefault(); e.stopPropagation();
       if (kind === "field") state.field = e.target.closest("input") || e.target;
+      else if (kind === "opener") state.opener = e.target.closest("button, a, summary, label, [role=button]") || e.target;
       else state.totalEl = e.target;
       stopPicking();
     };
@@ -377,6 +416,10 @@
         startPicking("total");
         sendResponse({ ok: true });
         break;
+      case "pickOpener":
+        startPicking("opener");
+        sendResponse({ ok: true });
+        break;
       case "discover":
         collectSiteCodes().then((codes) => sendResponse({ ok: true, codes }))
           .catch(() => sendResponse({ ok: true, codes: [] }));
@@ -401,6 +444,7 @@
           best: state.best,
           fieldFound: !!(state.field || findField()),
           totalFound: !!(state.totalEl),
+          openerFound: !!(state.opener || findOpener()),
         });
         break;
       default:

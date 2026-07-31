@@ -48,7 +48,9 @@ function render(st) {
   if (st.picking) {
     stext.textContent = st.picking === "field"
       ? "Cliquez sur le champ code promo dans la page…"
-      : "Cliquez sur le montant total dans la page…";
+      : st.picking === "opener"
+        ? "Cliquez sur le bouton « Ajouter un code promo »…"
+        : "Cliquez sur le montant total dans la page…";
   } else {
     stext.textContent = st.message || "Prêt.";
   }
@@ -138,9 +140,9 @@ $("discoverBtn").addEventListener("click", async () => {
     btn.disabled = false; btn.textContent = label;
   }
 });
+$("pickOpenerBtn").addEventListener("click", () => send("pickOpener").catch((e) => ($("statusText").textContent = e.message)));
 $("pickFieldBtn").addEventListener("click", () => send("pickField").catch((e) => ($("statusText").textContent = e.message)));
 $("pickTotalBtn").addEventListener("click", () => send("pickTotal").catch((e) => ($("statusText").textContent = e.message)));
-$("detectBtn").addEventListener("click", () => send("detect").catch((e) => ($("statusText").textContent = e.message)));
 $("saveCodes").addEventListener("click", async () => { await savePrefs(); $("statusText").textContent = "Liste enregistrée."; });
 $("resetCodes").addEventListener("click", async () => {
   $("codes").value = window.PROMO_DEFAULT_CODES.join("\n");

@@ -55,6 +55,11 @@ illégale). On lit vos propres données côté client, rien d'autre.
 - Les pastilles « Champ » et « Total » indiquent si la détection automatique a
   réussi. Sinon, utilisez **🎯 Champ** / **🎯 Total** puis cliquez directement
   sur l'élément concerné dans la page.
+- **Champ caché dans un panneau qui se referme** (ex. Maison du Monde : le champ
+  n'apparaît qu'après un clic sur « Ajouter un code promo », et le panneau se
+  referme quand un code est refusé) : l'extension rouvre automatiquement ce
+  panneau avant chaque essai. Si elle ne trouve pas le bon bouton, utilisez
+  **🎯 Ouvrir** puis cliquez sur le bouton « Ajouter un code promo ».
 - **Réglages & liste de codes** : modifiez la liste (un code par ligne) et le
   délai entre les essais.
 
