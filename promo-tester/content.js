@@ -118,18 +118,34 @@
     return state.field;
   }
 
+  // Trouve le bouton « Valider / Appliquer ». On cherche dans TOUTE la page
+  // (le bouton n'est pas toujours dans le même conteneur que le champ, ex. Sklum)
+  // et on choisit le meilleur candidat par mot-clé + proximité géographique.
   function findApplyButton(field) {
     if (state.applyBtn && document.contains(state.applyBtn) && isVisible(state.applyBtn)) return state.applyBtn;
     if (!field) return null;
-    const scope = field.closest("form,div,section,li") || document.body;
-    const btns = [...scope.querySelectorAll('button, input[type=submit], input[type=button], a[role=button]')]
-      .filter(isVisible);
-    let hit = btns.find((b) => APPLY_RE.test((b.textContent || "") + " " + attrsOf(b)));
-    if (!hit) {
-      // bouton visible le plus proche après le champ
-      hit = btns.find((b) => field.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) || btns[0];
-    }
-    state.applyBtn = hit || null;
+    const fr = field.getBoundingClientRect();
+    const fcx = fr.left + fr.width / 2, fcy = fr.top + fr.height / 2;
+    const scored = [...document.querySelectorAll('button, input[type=submit], input[type=button], a[role=button], [role=button]')]
+      .filter((b) => isVisible(b) && b !== state.opener)
+      .map((b) => {
+        const r = b.getBoundingClientRect();
+        const dist = Math.hypot(r.left + r.width / 2 - fcx, r.top + r.height / 2 - fcy);
+        const txt = (b.textContent || "") + " " + attrsOf(b);
+        // « Ajouter un code promo » matche APPLY_RE mais c'est un ouvreur, pas un valideur
+        const isApply = APPLY_RE.test(txt) && !OPENER_RE.test(txt);
+        const following = !!(field.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+        return { b, dist, isApply, following, submit: b.type === "submit" };
+      });
+    // 1) vrais boutons « valider/appliquer », le plus proche du champ
+    let pool = scored.filter((s) => s.isApply);
+    // 2) sinon, un bouton proche situé après le champ
+    if (!pool.length) pool = scored.filter((s) => s.following && s.dist < 450);
+    // 3) sinon, un submit du même formulaire
+    if (!pool.length && field.form) pool = scored.filter((s) => s.b.form === field.form && s.submit);
+    if (!pool.length) { state.applyBtn = null; return null; }
+    pool.sort((a, b) => a.dist - b.dist);
+    state.applyBtn = pool[0].b;
     return state.applyBtn;
   }
 
@@ -363,6 +379,7 @@
       e.preventDefault(); e.stopPropagation();
       if (kind === "field") { state.field = e.target.closest("input") || e.target; state.message = "Champ enregistré ✓"; }
       else if (kind === "opener") { state.opener = e.target.closest("button, a, summary, label, [role=button]") || e.target; state.message = "Bouton d'ouverture enregistré ✓ — cliquez « Lancer la recherche »."; }
+      else if (kind === "apply") { state.applyBtn = e.target.closest("button, input, a, [role=button]") || e.target; state.message = "Bouton « Valider » enregistré ✓"; }
       else { state.totalEl = e.target; state.message = "Total enregistré ✓"; }
       stopPicking();
     };
@@ -433,13 +450,13 @@
         <div class="hd" id="hd"><span>🏷️</span><b>Promo Code Tester</b><button id="min" title="Réduire">–</button><button id="cls" title="Fermer">✕</button></div>
         <div class="bd" id="bd">
           <div class="st"><div class="msg" id="msg">Prêt.</div><div class="best" id="best"></div>
-            <div class="tags"><span class="tag" id="tF">Champ</span><span class="tag" id="tO">Ouvrir</span><span class="tag" id="tT">Total</span></div>
+            <div class="tags"><span class="tag" id="tF">Champ</span><span class="tag" id="tV">Valider</span><span class="tag" id="tO">Ouvrir</span><span class="tag" id="tT">Total</span></div>
           </div>
           <button class="b go" id="go">▶ Lancer la recherche</button>
           <button class="b stop" id="stop" style="display:none">■ Stopper &amp; garder le meilleur</button>
           <button class="b find" id="find">🔎 Trouver les codes du site</button>
-          <div class="row"><button class="b" id="pO">🎯 Ouvrir</button><button class="b" id="pF">🎯 Champ</button><button class="b" id="pT">🎯 Total</button></div>
-          <p class="hint">Glissez la barre du haut pour déplacer ce panneau et dégager le champ. « 🎯 Ouvrir » = le bouton « Ajouter un code promo ».</p>
+          <div class="row"><button class="b" id="pO">🎯 Ouvrir</button><button class="b" id="pF">🎯 Champ</button><button class="b" id="pV">🎯 Valider</button><button class="b" id="pT">🎯 Total</button></div>
+          <p class="hint">Glissez la barre du haut pour déplacer ce panneau et dégager le champ. « 🎯 Valider » = le bouton à côté du champ ; « 🎯 Ouvrir » = « Ajouter un code promo ».</p>
         </div>
       </div>`;
     document.documentElement.appendChild(widgetHost);
@@ -449,6 +466,7 @@
     $("stop").addEventListener("click", () => { state.running = false; });
     $("pO").addEventListener("click", () => startPicking("opener"));
     $("pF").addEventListener("click", () => startPicking("field"));
+    $("pV").addEventListener("click", () => startPicking("apply"));
     $("pT").addEventListener("click", () => startPicking("total"));
     $("find").addEventListener("click", async () => {
       $("find").textContent = "🔎 Analyse…";
@@ -494,13 +512,13 @@
   function updateWidget(root) {
     if (!widgetHost) return;
     const $ = (id) => root.getElementById(id);
-    $("msg").textContent = picking
-      ? (picking === "field" ? "Cliquez sur le champ code promo…" : picking === "opener" ? "Cliquez sur « Ajouter un code promo »…" : "Cliquez sur le total…")
-      : (state.message || "Prêt.");
+    const pickMsg = { field: "Cliquez sur le champ code promo…", opener: "Cliquez sur « Ajouter un code promo »…", apply: "Cliquez sur le bouton « Valider »…", total: "Cliquez sur le total…" };
+    $("msg").textContent = picking ? pickMsg[picking] : (state.message || "Prêt.");
     $("best").textContent = state.best ? `Meilleur : ${state.best.code} → ${fmt(state.best.total)}` +
       (state.baseline != null ? ` (−${fmt(state.baseline - state.best.total)})` : "") : "";
     const setTag = (id, ok) => { const el = $(id); el.className = "tag " + (ok ? "ok" : "no"); };
     setTag("tF", !!(state.field || findField()));
+    setTag("tV", !!(state.applyBtn || (state.field && findApplyButton(state.field))));
     setTag("tO", !!(state.opener || findOpener()));
     setTag("tT", !!state.totalEl);
     $("go").style.display = state.running ? "none" : "block";
@@ -609,6 +627,10 @@
         break;
       case "pickOpener":
         startPicking("opener");
+        sendResponse({ ok: true });
+        break;
+      case "pickApply":
+        startPicking("apply");
         sendResponse({ ok: true });
         break;
       case "showWidget":

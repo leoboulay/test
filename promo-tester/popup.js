@@ -50,7 +50,9 @@ function render(st) {
       ? "Cliquez sur le champ code promo dans la page…"
       : st.picking === "opener"
         ? "Cliquez sur le bouton « Ajouter un code promo »…"
-        : "Cliquez sur le montant total dans la page…";
+        : st.picking === "apply"
+          ? "Cliquez sur le bouton « Valider » à côté du champ…"
+          : "Cliquez sur le montant total dans la page…";
   } else {
     stext.textContent = st.message || "Prêt.";
   }
@@ -146,6 +148,7 @@ $("discoverBtn").addEventListener("click", async () => {
 });
 $("pickOpenerBtn").addEventListener("click", () => send("pickOpener").catch((e) => ($("statusText").textContent = e.message)));
 $("pickFieldBtn").addEventListener("click", () => send("pickField").catch((e) => ($("statusText").textContent = e.message)));
+$("pickApplyBtn").addEventListener("click", () => send("pickApply").catch((e) => ($("statusText").textContent = e.message)));
 $("pickTotalBtn").addEventListener("click", () => send("pickTotal").catch((e) => ($("statusText").textContent = e.message)));
 $("saveCodes").addEventListener("click", async () => { await savePrefs(); $("statusText").textContent = "Liste enregistrée."; });
 $("resetCodes").addEventListener("click", async () => {
