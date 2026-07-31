@@ -39,6 +39,21 @@
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  // Clic « réaliste » : beaucoup de sites (React/Vue) n'ouvrent leur volet que
+  // sur une vraie séquence pointer/souris, pas sur un simple .click().
+  function clickReal(el) {
+    if (!el) return;
+    const o = { bubbles: true, cancelable: true, view: window };
+    try { el.scrollIntoView({ block: "center" }); } catch (e) {}
+    try { el.dispatchEvent(new PointerEvent("pointerover", { ...o, pointerType: "mouse" })); } catch (e) {}
+    try { el.dispatchEvent(new PointerEvent("pointerdown", { ...o, pointerType: "mouse" })); } catch (e) {}
+    el.dispatchEvent(new MouseEvent("mousedown", o));
+    try { el.focus(); } catch (e) {}
+    try { el.dispatchEvent(new PointerEvent("pointerup", { ...o, pointerType: "mouse" })); } catch (e) {}
+    el.dispatchEvent(new MouseEvent("mouseup", o));
+    try { el.click(); } catch (e) { el.dispatchEvent(new MouseEvent("click", o)); }
+  }
+
   function isVisible(el) {
     if (!el) return false;
     const s = getComputedStyle(el);
@@ -118,17 +133,24 @@
   // Déclencheur qui déplie le champ code promo (ex. « Ajouter un code promo »).
   function findOpener() {
     if (state.opener && document.contains(state.opener) && isVisible(state.opener)) return state.opener;
-    const clickables = [...document.querySelectorAll(
-      "button, a, summary, label, [role=button], [aria-controls], [aria-expanded]"
-    )];
-    const hit = clickables.find((el) => {
+    const matches = (el) => {
       if (!isVisible(el) || el === state.applyBtn) return false;
       const txt = (el.textContent || "").trim();
       if (!txt || txt.length > 45) return false;
-      // on veut le lien/bouton qui OUVRE, pas un champ ni le bouton « Appliquer »
-      if (APPLY_RE.test(txt) && !OPENER_RE.test(txt)) return false;
+      if (APPLY_RE.test(txt) && !OPENER_RE.test(txt)) return false; // pas « Appliquer »
       return OPENER_RE.test(txt) || OPENER_RE.test(attrsOf(el));
-    });
+    };
+    // 1) éléments clairement cliquables
+    let hit = [...document.querySelectorAll(
+      "button, a, summary, [role=button], [role=link], [aria-controls], [aria-expanded]"
+    )].find(matches);
+    // 2) repli : n'importe quel élément court avec un curseur « pointer »
+    if (!hit) {
+      hit = [...document.querySelectorAll("label, span, div, p, li")].find((el) => {
+        if (!matches(el) || el.querySelector("input")) return false;
+        try { return getComputedStyle(el).cursor === "pointer"; } catch (e) { return false; }
+      });
+    }
     state.opener = hit || null;
     return state.opener;
   }
@@ -137,10 +159,12 @@
   async function ensureFieldReady() {
     let field = findField();
     if (field && isVisible(field)) return field;
-    const opener = findOpener();
-    if (opener) {
-      try { opener.click(); } catch (e) {}
-      for (let i = 0; i < 15; i++) {
+    // jusqu'à 2 tentatives d'ouverture (le volet peut mettre du temps à répondre)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const opener = findOpener();
+      if (!opener) break;
+      clickReal(opener);
+      for (let i = 0; i < 18; i++) {
         await sleep(120);
         state.field = null;            // force une nouvelle recherche
         field = findField();
@@ -201,7 +225,7 @@
     await sleep(60);
     const btn = findApplyButton(field);
     if (btn) {
-      btn.click();
+      clickReal(btn);
     } else {
       // pas de bouton : on tente Entrée + submit du formulaire
       field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, bubbles: true }));
@@ -242,15 +266,22 @@
     state.phase = "running";
     state.message = "Recherche en cours…";
 
+    let noFieldStreak = 0;
     for (state.index = 0; state.index < state.codes.length; state.index++) {
       if (!state.running) break;
       const code = state.codes[state.index];
       state.currentCode = code;
       try {
         await applyCode(code);
+        noFieldStreak = 0;
       } catch (e) {
-        fail("Le champ a disparu pendant la recherche.");
-        return;
+        // le volet ne s'est pas rouvert : on n'abandonne pas tout de suite
+        if (++noFieldStreak >= 3) {
+          fail("Le champ code promo reste introuvable après réouverture. Cliquez sur « 🎯 Ouvrir » puis sur le bouton « Ajouter un code promo » de la page, et relancez.");
+          return;
+        }
+        await sleep(state.delay);
+        continue;
       }
       const total = await waitForTotal(Math.max(state.delay, 500));
       state.currentTotal = total;
@@ -300,9 +331,9 @@
     const onOut = (e) => { e.target.style.outline = ""; };
     const onClick = (e) => {
       e.preventDefault(); e.stopPropagation();
-      if (kind === "field") state.field = e.target.closest("input") || e.target;
-      else if (kind === "opener") state.opener = e.target.closest("button, a, summary, label, [role=button]") || e.target;
-      else state.totalEl = e.target;
+      if (kind === "field") { state.field = e.target.closest("input") || e.target; state.message = "Champ enregistré ✓"; }
+      else if (kind === "opener") { state.opener = e.target.closest("button, a, summary, label, [role=button]") || e.target; state.message = "Bouton d'ouverture enregistré ✓ — cliquez « Lancer la recherche »."; }
+      else { state.totalEl = e.target; state.message = "Total enregistré ✓"; }
       stopPicking();
     };
     document.addEventListener("mouseover", onOver, true);
