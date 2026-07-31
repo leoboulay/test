@@ -1,0 +1,344 @@
+/* Promo Code Tester — script injecté dans la page.
+ * Rôle : détecter le champ code promo + le bouton « appliquer » + le total,
+ * essayer une liste de codes, mémoriser celui qui donne le total le plus bas,
+ * puis réappliquer le meilleur à l'arrêt. Tout l'état vit ici (le popup peut
+ * se fermer sans interrompre la recherche).
+ */
+(function () {
+  if (window.__promoTesterLoaded) return;
+  window.__promoTesterLoaded = true;
+
+  const FIELD_RE = /(promo|coupon|voucher|discount|gift[\s-]?card|code|rabais|r[ée]duc|bon|cadeau)/i;
+  const APPLY_RE = /(appliquer|valider|utiliser|ajouter|ok|apply|redeem|submit|add|use|activer)/i;
+  const TOTAL_RE = /(total|à\s*payer|a\s*payer|montant|net\s*à\s*payer|order\s*total|grand\s*total|amount\s*due|sous[\s-]?total|subtotal)/i;
+
+  const state = {
+    running: false,
+    phase: "idle",           // idle | running | done | stopped | error
+    message: "",
+    codes: [],
+    index: 0,
+    delay: 700,
+    baseline: null,
+    currentTotal: null,
+    currentCode: "",
+    best: null,              // { code, total }
+    field: null,
+    applyBtn: null,
+    totalEl: null,
+    error: "",
+  };
+
+  let picking = null;         // "field" | "total" | null
+  let pickOverlayCleanup = null;
+
+  /* ---------- utilitaires ---------- */
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function isVisible(el) {
+    if (!el) return false;
+    const s = getComputedStyle(el);
+    if (s.display === "none" || s.visibility === "hidden" || s.opacity === "0") return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+
+  function attrsOf(el) {
+    return [
+      el.id, el.name, el.className,
+      el.getAttribute("placeholder"), el.getAttribute("aria-label"),
+      el.getAttribute("data-testid"), el.getAttribute("title"),
+    ].filter(Boolean).join(" ");
+  }
+
+  function parsePrice(str) {
+    if (str == null) return null;
+    const m = String(str).match(/-?\d[\d., \s]*\d|\d/);
+    if (!m) return null;
+    let s = m[0].replace(/[\s ]/g, "");
+    const hasComma = s.includes(","), hasDot = s.includes(".");
+    let norm;
+    if (hasComma && hasDot) {
+      norm = s.lastIndexOf(",") > s.lastIndexOf(".")
+        ? s.replace(/\./g, "").replace(",", ".")
+        : s.replace(/,/g, "");
+    } else if (hasComma) {
+      const p = s.split(",");
+      norm = (p.length === 2 && p[1].length === 2) ? p[0] + "." + p[1] : s.replace(/,/g, "");
+    } else if (hasDot) {
+      const p = s.split(".");
+      norm = (p.length === 2 && p[1].length === 2) ? s : s.replace(/\./g, "");
+    } else {
+      norm = s;
+    }
+    const v = parseFloat(norm);
+    return isNaN(v) ? null : v;
+  }
+
+  /* ---------- détection automatique ---------- */
+
+  function findField() {
+    if (state.field && document.contains(state.field) && isVisible(state.field)) return state.field;
+    const inputs = [...document.querySelectorAll("input")].filter((el) => {
+      const t = (el.type || "text").toLowerCase();
+      return ["text", "search", "", "tel"].includes(t) && isVisible(el) && !el.disabled;
+    });
+    // 1) champ dont les attributs évoquent un code promo
+    let hit = inputs.find((el) => FIELD_RE.test(attrsOf(el)));
+    // 2) sinon champ dont le label/voisinage évoque un code promo
+    if (!hit) {
+      hit = inputs.find((el) => {
+        const around = (el.closest("form,div,section,li") || el.parentElement);
+        return around && FIELD_RE.test(around.textContent || "");
+      });
+    }
+    state.field = hit || null;
+    return state.field;
+  }
+
+  function findApplyButton(field) {
+    if (state.applyBtn && document.contains(state.applyBtn) && isVisible(state.applyBtn)) return state.applyBtn;
+    if (!field) return null;
+    const scope = field.closest("form,div,section,li") || document.body;
+    const btns = [...scope.querySelectorAll('button, input[type=submit], input[type=button], a[role=button]')]
+      .filter(isVisible);
+    let hit = btns.find((b) => APPLY_RE.test((b.textContent || "") + " " + attrsOf(b)));
+    if (!hit) {
+      // bouton visible le plus proche après le champ
+      hit = btns.find((b) => field.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) || btns[0];
+    }
+    state.applyBtn = hit || null;
+    return state.applyBtn;
+  }
+
+  function findTotal() {
+    if (state.totalEl && document.contains(state.totalEl)) return state.totalEl;
+    const candidates = [];
+    const all = document.querySelectorAll("body *");
+    for (const el of all) {
+      if (el.children.length > 3) continue;              // on veut des feuilles
+      const txt = (el.textContent || "").trim();
+      if (txt.length > 60) continue;
+      if (!TOTAL_RE.test(txt) && !TOTAL_RE.test(attrsOf(el))) continue;
+      const price = parsePrice(txt) ?? parsePrice((el.parentElement && el.parentElement.textContent) || "");
+      if (price == null) continue;
+      if (!isVisible(el)) continue;
+      const isGrand = /(net\s*à\s*payer|grand\s*total|order\s*total|total\s*(ttc|à\s*payer)?|amount\s*due|à\s*payer)/i.test(txt);
+      const isSub = /(sous[\s-]?total|subtotal)/i.test(txt);
+      candidates.push({ el, price, score: (isGrand ? 2 : 0) - (isSub ? 1 : 0) });
+    }
+    if (!candidates.length) return null;
+    // meilleur score, puis le plus bas dans la page (souvent le total final)
+    candidates.sort((a, b) => (b.score - a.score) ||
+      (b.el.getBoundingClientRect().top - a.el.getBoundingClientRect().top));
+    state.totalEl = candidates[0].el;
+    return state.totalEl;
+  }
+
+  function readTotal() {
+    const el = findTotal();
+    if (!el) return null;
+    return parsePrice(el.textContent) ??
+           parsePrice(el.parentElement && el.parentElement.textContent);
+  }
+
+  /* ---------- saisie du code ---------- */
+
+  function setNativeValue(el, value) {
+    const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, "value").set;
+    setter.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  async function applyCode(code) {
+    const field = findField();
+    if (!field) throw new Error("no-field");
+    field.focus();
+    setNativeValue(field, "");
+    await sleep(30);
+    setNativeValue(field, code);
+    await sleep(60);
+    const btn = findApplyButton(field);
+    if (btn) {
+      btn.click();
+    } else {
+      // pas de bouton : on tente Entrée + submit du formulaire
+      field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, bubbles: true }));
+      field.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", keyCode: 13, bubbles: true }));
+      const form = field.closest("form");
+      if (form && form.requestSubmit) form.requestSubmit();
+    }
+  }
+
+  // Attend que le total se stabilise (2 lectures identiques) ou le délai max.
+  async function waitForTotal(maxMs) {
+    const start = Date.now();
+    let last = readTotal(), stable = 0;
+    while (Date.now() - start < maxMs) {
+      await sleep(150);
+      const now = readTotal();
+      if (now != null && now === last) {
+        if (++stable >= 2) return now;
+      } else {
+        stable = 0;
+      }
+      last = now;
+    }
+    return last;
+  }
+
+  /* ---------- boucle principale ---------- */
+
+  async function run() {
+    state.error = "";
+    const field = findField();
+    if (!field) { fail("Champ « code promo » introuvable. Ouvrez la page panier, ou sélectionnez le champ manuellement."); return; }
+    if (!findTotal()) { fail("Total introuvable. Sélectionnez le total manuellement (bouton dans l'extension)."); return; }
+
+    state.baseline = readTotal();
+    state.currentTotal = state.baseline;
+    state.best = null;
+    state.phase = "running";
+    state.message = "Recherche en cours…";
+
+    for (state.index = 0; state.index < state.codes.length; state.index++) {
+      if (!state.running) break;
+      const code = state.codes[state.index];
+      state.currentCode = code;
+      try {
+        await applyCode(code);
+      } catch (e) {
+        fail("Le champ a disparu pendant la recherche.");
+        return;
+      }
+      const total = await waitForTotal(Math.max(state.delay, 500));
+      state.currentTotal = total;
+      if (total != null && (state.best == null ? total < (state.baseline ?? Infinity) : total < state.best.total)) {
+        state.best = { code, total };
+        state.message = `Nouveau meilleur code : ${code}`;
+      }
+      await sleep(state.delay);
+    }
+
+    // fin ou arrêt : on réapplique le meilleur code trouvé
+    state.running = false;
+    if (state.best) {
+      state.message = `Réapplication du meilleur code : ${state.best.code}`;
+      try {
+        await applyCode(state.best.code);
+        await waitForTotal(Math.max(state.delay, 800));
+      } catch (e) { /* ignore */ }
+      state.currentTotal = readTotal();
+      state.phase = state.index >= state.codes.length ? "done" : "stopped";
+      state.message = `Meilleur code appliqué : ${state.best.code} (total ${fmt(state.best.total)})`;
+    } else {
+      state.phase = state.index >= state.codes.length ? "done" : "stopped";
+      state.message = "Aucun code n'a réduit le total.";
+      // on remet le champ propre
+      const f = findField();
+      if (f) setNativeValue(f, "");
+    }
+  }
+
+  function fmt(n) { return n == null ? "?" : n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
+  function fail(msg) {
+    state.running = false;
+    state.phase = "error";
+    state.error = msg;
+    state.message = msg;
+  }
+
+  /* ---------- sélection manuelle (clic) ---------- */
+
+  function startPicking(kind) {
+    stopPicking();
+    picking = kind;
+    document.body.style.cursor = "crosshair";
+    const onOver = (e) => { e.target.style.outline = "2px solid #ff3b6b"; e.target.style.outlineOffset = "1px"; };
+    const onOut = (e) => { e.target.style.outline = ""; };
+    const onClick = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (kind === "field") state.field = e.target.closest("input") || e.target;
+      else state.totalEl = e.target;
+      stopPicking();
+    };
+    document.addEventListener("mouseover", onOver, true);
+    document.addEventListener("mouseout", onOut, true);
+    document.addEventListener("click", onClick, true);
+    pickOverlayCleanup = () => {
+      document.removeEventListener("mouseover", onOver, true);
+      document.removeEventListener("mouseout", onOut, true);
+      document.removeEventListener("click", onClick, true);
+      document.querySelectorAll('[style*="outline"]').forEach((el) => (el.style.outline = ""));
+      document.body.style.cursor = "";
+    };
+  }
+  function stopPicking() {
+    picking = null;
+    if (pickOverlayCleanup) { pickOverlayCleanup(); pickOverlayCleanup = null; }
+  }
+
+  /* ---------- messagerie avec le popup ---------- */
+
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    switch (msg.action) {
+      case "ping":
+        sendResponse({ ok: true });
+        break;
+      case "start":
+        if (state.running) { sendResponse({ ok: false, error: "already-running" }); break; }
+        state.codes = (msg.codes && msg.codes.length ? msg.codes : (window.PROMO_DEFAULT_CODES || []));
+        state.delay = Math.max(150, msg.delay || 700);
+        state.running = true;
+        state.index = 0;
+        run();
+        sendResponse({ ok: true });
+        break;
+      case "stop":
+        state.running = false;
+        sendResponse({ ok: true });
+        break;
+      case "reapplyBest":
+        if (state.best) applyCode(state.best.code);
+        sendResponse({ ok: true, best: state.best });
+        break;
+      case "pickField":
+        startPicking("field");
+        sendResponse({ ok: true });
+        break;
+      case "pickTotal":
+        startPicking("total");
+        sendResponse({ ok: true });
+        break;
+      case "detect": {
+        const f = findField(), t = findTotal();
+        sendResponse({ ok: true, field: !!f, total: !!t, totalValue: readTotal() });
+        break;
+      }
+      case "status":
+        sendResponse({
+          ok: true,
+          running: state.running,
+          phase: state.phase,
+          message: state.message,
+          picking,
+          index: state.index,
+          count: state.codes.length,
+          currentCode: state.currentCode,
+          currentTotal: state.currentTotal,
+          baseline: state.baseline,
+          best: state.best,
+          fieldFound: !!(state.field || findField()),
+          totalFound: !!(state.totalEl),
+        });
+        break;
+      default:
+        sendResponse({ ok: false, error: "unknown-action" });
+    }
+    return true;
+  });
+})();

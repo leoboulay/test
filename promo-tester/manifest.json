@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Promo Code Tester",
+  "version": "1.0.0",
+  "description": "Teste automatiquement une liste de codes promo sur la page panier d'un site et garde le meilleur (total le plus bas).",
+  "permissions": ["storage", "activeTab", "scripting"],
+  "action": {
+    "default_title": "Promo Code Tester",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["codes.js", "content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}
