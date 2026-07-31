@@ -29,6 +29,7 @@
     applyBtn: null,
     totalEl: null,
     opener: null,            // déclencheur « Ajouter un code promo » (panneau repliable)
+    reapplying: false,       // réapplication du meilleur code en cours (fin de recherche)
     error: "",
   };
 
@@ -158,20 +159,36 @@
   }
 
   // Garantit que le champ est présent et visible : rouvre le panneau si besoin.
+  // Après un code refusé, le panier peut se recharger lentement : on laisse un
+  // temps de repos puis on INSISTE (re-clics répétés) jusqu'à ~15 s.
   async function ensureFieldReady() {
     let field = findField();
     if (field && isVisible(field)) return field;
-    // jusqu'à 2 tentatives d'ouverture (le volet peut mettre du temps à répondre)
-    for (let attempt = 0; attempt < 2; attempt++) {
+
+    // on ne bloque pas éternellement, mais on insiste ; Stop interrompt.
+    const deadline = Date.now() + Math.max(15000, state.delay * 12);
+    // petit temps de repos initial : laisser le panier finir de se recharger
+    await sleep(Math.min(600, Math.max(300, state.delay)));
+    let clicks = 0;
+
+    while (Date.now() < deadline && (state.running || state.reapplying)) {
+      // le DOM a pu être re-rendu : on repart d'un déclencheur frais
+      if (!(state.opener && document.contains(state.opener) && isVisible(state.opener))) state.opener = null;
       const opener = findOpener();
-      if (!opener) break;
-      clickReal(opener);
-      for (let i = 0; i < 18; i++) {
-        await sleep(120);
-        state.field = null;            // force une nouvelle recherche
+      if (opener) {
+        clickReal(opener);
+        clicks++;
+        state.message = `Réouverture du panneau code promo… (essai ${clicks})`;
+      }
+      // laisser le temps au volet d'apparaître (rechargement asynchrone)
+      for (let i = 0; i < 14; i++) {
+        await sleep(220);
+        state.field = null;              // force une nouvelle recherche
         field = findField();
         if (field && isVisible(field)) return field;
       }
+      // pas encore ouvert : on patiente un peu avant de ré-insister
+      await sleep(400);
     }
     return findField();
   }
@@ -237,17 +254,21 @@
     }
   }
 
-  // Attend que le total se stabilise (2 lectures identiques) ou le délai max.
-  async function waitForTotal(maxMs) {
+  // Attend le total APRÈS application d'un code. Sur un site lent, le montant
+  // n'est mis à jour qu'après un rechargement : on attend donc qu'il CHANGE par
+  // rapport à `ref` (total avant l'essai) puis se stabilise. S'il ne bouge pas
+  // dans le temps imparti, le code est considéré sans effet.
+  async function waitForTotal(maxMs, ref) {
     const start = Date.now();
     let last = readTotal(), stable = 0;
     while (Date.now() - start < maxMs) {
-      await sleep(150);
+      await sleep(180);
       const now = readTotal();
-      if (now != null && now === last) {
-        if (++stable >= 2) return now;
-      } else {
-        stable = 0;
+      if (now == null) { last = now; continue; }
+      if (ref == null || now !== ref) {
+        // un changement (ou pas de référence) : on attend la stabilisation
+        if (now === last) { if (++stable >= 2) return now; }
+        else stable = 0;
       }
       last = now;
     }
@@ -273,6 +294,7 @@
       if (!state.running) break;
       const code = state.codes[state.index];
       state.currentCode = code;
+      const before = readTotal();          // total avant l'essai (référence)
       try {
         await applyCode(code);
         noFieldStreak = 0;
@@ -285,7 +307,8 @@
         await sleep(state.delay);
         continue;
       }
-      const total = await waitForTotal(Math.max(state.delay, 500));
+      // fenêtre d'attente généreuse : laisser le temps au panier de recharger
+      const total = await waitForTotal(Math.max(state.delay, 2500), before);
       state.currentTotal = total;
       if (total != null && (state.best == null ? total < (state.baseline ?? Infinity) : total < state.best.total)) {
         state.best = { code, total };
@@ -298,10 +321,13 @@
     state.running = false;
     if (state.best) {
       state.message = `Réapplication du meilleur code : ${state.best.code}`;
+      state.reapplying = true;           // autorise ensureFieldReady à insister
       try {
+        const before = readTotal();
         await applyCode(state.best.code);
-        await waitForTotal(Math.max(state.delay, 800));
+        await waitForTotal(Math.max(state.delay, 2500), before);
       } catch (e) { /* ignore */ }
+      state.reapplying = false;
       state.currentTotal = readTotal();
       state.phase = state.index >= state.codes.length ? "done" : "stopped";
       state.message = `Meilleur code appliqué : ${state.best.code} (total ${fmt(state.best.total)})`;
