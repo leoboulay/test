@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <h1>🏷️ Promo Code Tester</h1>
+    <p class="sub">Trouve le meilleur code promo de la page panier</p>
+  </header>
+
+  <section class="status" id="statusBox">
+    <div class="statusRow">
+      <span class="dot" id="dot"></span>
+      <span id="statusText">Prêt.</span>
+    </div>
+    <div class="bars" id="detectRow">
+      <span class="tag" id="fieldTag">Champ : ?</span>
+      <span class="tag" id="totalTag">Total : ?</span>
+    </div>
+  </section>
+
+  <section class="progress hidden" id="progressBox">
+    <div class="progLine">
+      <span id="progLabel">0 / 0</span>
+      <span id="curCode" class="mono"></span>
+    </div>
+    <div class="track"><div class="fill" id="fill"></div></div>
+    <div class="totals">
+      <div><small>Départ</small><b id="baseVal">—</b></div>
+      <div><small>Actuel</small><b id="curVal">—</b></div>
+      <div class="best"><small>Meilleur</small><b id="bestVal">—</b></div>
+    </div>
+    <div class="bestCode hidden" id="bestCodeBox">Meilleur code : <b id="bestCode" class="mono"></b> <span id="saveVal"></span></div>
+  </section>
+
+  <div class="controls">
+    <button id="widgetBtn" class="accent">📌 Afficher le panneau déplaçable sur la page</button>
+  </div>
+  <p class="hint" style="margin:-2px 2px 10px">Recommandé si le popup cache le champ : le panneau s'affiche dans la page et se déplace à la souris.</p>
+
+  <div class="controls">
+    <button id="startBtn" class="primary">▶ Lancer la recherche</button>
+    <button id="stopBtn" class="danger hidden">■ Stopper & garder le meilleur</button>
+  </div>
+
+  <div class="controls">
+    <button id="discoverBtn" class="accent">🔎 Trouver les codes du site</button>
+  </div>
+
+  <div class="controls small">
+    <button id="pickOpenerBtn" class="ghost">🎯 Ouvrir</button>
+    <button id="pickFieldBtn" class="ghost">🎯 Champ</button>
+    <button id="pickApplyBtn" class="ghost">🎯 Valider</button>
+    <button id="pickTotalBtn" class="ghost">🎯 Total</button>
+  </div>
+  <p class="hint" style="margin:-2px 2px 8px">🎯 Ouvrir = le bouton « Ajouter un code promo » (si le champ est caché dans un panneau qui se referme).</p>
+
+  <details id="settings">
+    <summary>Réglages & liste de codes</summary>
+    <label class="fld">
+      Délai entre les essais (ms)
+      <input type="number" id="delay" min="150" step="50" value="700" />
+    </label>
+    <p class="hint">Plus le délai est court, plus c'est rapide — mais plus le risque d'être bloqué par le site est élevé. 500–1000 ms est raisonnable.</p>
+    <label class="fld">
+      Codes à tester (un par ligne)
+      <textarea id="codes" rows="6" spellcheck="false"></textarea>
+    </label>
+    <div class="controls small">
+      <button id="saveCodes" class="ghost">💾 Enregistrer</button>
+      <button id="resetCodes" class="ghost">↺ Liste par défaut</button>
+    </div>
+  </details>
+
+  <p class="foot">Usage responsable : teste une liste de codes connus, pas de la force brute. Respectez les conditions d'utilisation des sites.</p>
+
+  <script src="codes.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
