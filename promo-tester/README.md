@@ -52,6 +52,12 @@ illégale). On lit vos propres données côté client, rien d'autre.
 ## Utilisation
 
 - Ouvrez la page **panier** du site, puis cliquez sur l'icône de l'extension.
+- **Si le popup cache le champ code promo** (le popup de Chrome est collé à la
+  barre d'outils et ne se déplace pas) : cliquez sur **📌 Afficher le panneau
+  déplaçable sur la page**. Un petit panneau apparaît dans la page ; **glissez
+  sa barre de titre** pour le poser où vous voulez et dégager le champ. Il
+  contient les mêmes commandes (Lancer, Stopper, Trouver les codes, 🎯 Ouvrir /
+  Champ / Total) et ne se ferme pas quand vous cliquez ailleurs.
 - Les pastilles « Champ » et « Total » indiquent si la détection automatique a
   réussi. Sinon, utilisez **🎯 Champ** / **🎯 Total** puis cliquez directement
   sur l'élément concerné dans la page.

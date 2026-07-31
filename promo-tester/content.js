@@ -34,6 +34,8 @@
 
   let picking = null;         // "field" | "total" | "opener" | null
   let pickOverlayCleanup = null;
+  let widgetHost = null;      // panneau flottant déplaçable injecté dans la page
+  let widgetTimer = null;
 
   /* ---------- utilitaires ---------- */
 
@@ -327,9 +329,11 @@
     stopPicking();
     picking = kind;
     document.body.style.cursor = "crosshair";
-    const onOver = (e) => { e.target.style.outline = "2px solid #ff3b6b"; e.target.style.outlineOffset = "1px"; };
-    const onOut = (e) => { e.target.style.outline = ""; };
+    const inWidget = (e) => widgetHost && e.composedPath && e.composedPath().includes(widgetHost);
+    const onOver = (e) => { if (inWidget(e)) return; e.target.style.outline = "2px solid #ff3b6b"; e.target.style.outlineOffset = "1px"; };
+    const onOut = (e) => { if (inWidget(e)) return; e.target.style.outline = ""; };
     const onClick = (e) => {
+      if (inWidget(e)) return;   // ne pas capturer les clics sur notre propre panneau
       e.preventDefault(); e.stopPropagation();
       if (kind === "field") { state.field = e.target.closest("input") || e.target; state.message = "Champ enregistré ✓"; }
       else if (kind === "opener") { state.opener = e.target.closest("button, a, summary, label, [role=button]") || e.target; state.message = "Bouton d'ouverture enregistré ✓ — cliquez « Lancer la recherche »."; }
@@ -350,6 +354,136 @@
   function stopPicking() {
     picking = null;
     if (pickOverlayCleanup) { pickOverlayCleanup(); pickOverlayCleanup = null; }
+  }
+
+  /* ---------- panneau flottant déplaçable (injecté dans la page) ----------
+   * Contrairement au popup de la barre d'outils, ce panneau vit dans la page :
+   * on peut le glisser où on veut pour dégager le champ code promo, et il ne se
+   * ferme pas quand on clique ailleurs.
+   */
+  async function startFromStorage() {
+    if (state.running) return;
+    let codes = [], delay = 700;
+    try { const g = await chrome.storage.local.get(["codes", "delay"]); codes = g.codes || []; delay = g.delay || 700; } catch (e) {}
+    state.codes = codes.length ? codes : (window.PROMO_DEFAULT_CODES || []);
+    state.delay = Math.max(150, delay);
+    state.running = true;
+    state.index = 0;
+    run();
+  }
+
+  function mountWidget() {
+    if (widgetHost && document.documentElement.contains(widgetHost)) { widgetHost.style.display = "block"; return; }
+    widgetHost = document.createElement("div");
+    widgetHost.id = "__promoTesterWidget";
+    widgetHost.style.cssText = "all:initial; position:fixed; top:80px; right:20px; z-index:2147483647;";
+    const root = widgetHost.attachShadow({ mode: "open" });
+    root.innerHTML = `
+      <style>
+        :host,* { box-sizing:border-box; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+        .w { width:270px; background:#1c1f28; color:#eef1f7; border:1px solid #2c313d; border-radius:12px;
+             box-shadow:0 12px 34px rgba(0,0,0,.5); overflow:hidden; font-size:13px; }
+        .hd { display:flex; align-items:center; gap:6px; padding:9px 10px; background:#14161c; cursor:move; user-select:none; }
+        .hd b { flex:1; font-size:13px; }
+        .hd button { background:none; border:none; color:#97a0b3; cursor:pointer; font-size:15px; line-height:1; padding:2px 4px; }
+        .bd { padding:10px; }
+        .st { background:#232733; border:1px solid #2c313d; border-radius:8px; padding:8px; margin-bottom:9px; min-height:34px; }
+        .st .msg { font-weight:600; }
+        .st .best { color:#2ec16a; margin-top:4px; font-size:12px; }
+        .tags { margin-top:6px; display:flex; gap:5px; }
+        .tag { font-size:10.5px; padding:1px 6px; border-radius:20px; border:1px solid #2c313d; color:#97a0b3; }
+        .tag.ok { color:#2ec16a; border-color:#2ec16a55; }
+        .tag.no { color:#ff7a7a; border-color:#ff7a7a55; }
+        button.b { width:100%; cursor:pointer; border:1px solid #2c313d; border-radius:8px; padding:9px; font-weight:600; color:#eef1f7; background:#232733; margin-bottom:7px; }
+        button.b:hover { filter:brightness(1.15); }
+        .b.go { background:#ff3b6b; border-color:#ff3b6b; }
+        .b.stop { background:#33262b; border-color:#ff3b6b; color:#ff3b6b; }
+        .b.find { background:#23303a; border-color:#3aa0ff; color:#7ec2ff; }
+        .row { display:flex; gap:6px; }
+        .row .b { font-size:12px; font-weight:500; }
+        .hint { color:#97a0b3; font-size:10.5px; margin:2px 0 0; line-height:1.35; }
+      </style>
+      <div class="w">
+        <div class="hd" id="hd"><span>🏷️</span><b>Promo Code Tester</b><button id="min" title="Réduire">–</button><button id="cls" title="Fermer">✕</button></div>
+        <div class="bd" id="bd">
+          <div class="st"><div class="msg" id="msg">Prêt.</div><div class="best" id="best"></div>
+            <div class="tags"><span class="tag" id="tF">Champ</span><span class="tag" id="tO">Ouvrir</span><span class="tag" id="tT">Total</span></div>
+          </div>
+          <button class="b go" id="go">▶ Lancer la recherche</button>
+          <button class="b stop" id="stop" style="display:none">■ Stopper &amp; garder le meilleur</button>
+          <button class="b find" id="find">🔎 Trouver les codes du site</button>
+          <div class="row"><button class="b" id="pO">🎯 Ouvrir</button><button class="b" id="pF">🎯 Champ</button><button class="b" id="pT">🎯 Total</button></div>
+          <p class="hint">Glissez la barre du haut pour déplacer ce panneau et dégager le champ. « 🎯 Ouvrir » = le bouton « Ajouter un code promo ».</p>
+        </div>
+      </div>`;
+    document.documentElement.appendChild(widgetHost);
+
+    const $ = (id) => root.getElementById(id);
+    $("go").addEventListener("click", () => startFromStorage());
+    $("stop").addEventListener("click", () => { state.running = false; });
+    $("pO").addEventListener("click", () => startPicking("opener"));
+    $("pF").addEventListener("click", () => startPicking("field"));
+    $("pT").addEventListener("click", () => startPicking("total"));
+    $("find").addEventListener("click", async () => {
+      $("find").textContent = "🔎 Analyse…";
+      try {
+        const found = await collectSiteCodes();
+        if (found.length) {
+          const g = await chrome.storage.local.get(["codes"]);
+          const merged = [...new Set([...found, ...(g.codes || window.PROMO_DEFAULT_CODES || [])])];
+          await chrome.storage.local.set({ codes: merged });
+          state.message = `${found.length} code(s) trouvé(s) sur le site, ajoutés en tête.`;
+        } else {
+          state.message = "Aucun code détecté dans la page.";
+        }
+      } catch (e) { state.message = "Découverte impossible ici."; }
+      $("find").textContent = "🔎 Trouver les codes du site";
+    });
+    $("cls").addEventListener("click", unmountWidget);
+    $("min").addEventListener("click", () => {
+      const bd = $("bd"); bd.style.display = bd.style.display === "none" ? "block" : "none";
+    });
+
+    // glisser-déposer via la barre de titre
+    $("hd").addEventListener("mousedown", (e) => {
+      if (e.target.tagName === "BUTTON") return;
+      e.preventDefault();
+      const r = widgetHost.getBoundingClientRect();
+      const ox = e.clientX - r.left, oy = e.clientY - r.top;
+      const move = (ev) => {
+        widgetHost.style.left = Math.max(0, ev.clientX - ox) + "px";
+        widgetHost.style.top = Math.max(0, ev.clientY - oy) + "px";
+        widgetHost.style.right = "auto";
+      };
+      const up = () => { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
+      document.addEventListener("mousemove", move);
+      document.addEventListener("mouseup", up);
+    });
+
+    if (widgetTimer) clearInterval(widgetTimer);
+    widgetTimer = setInterval(() => updateWidget(root), 400);
+    updateWidget(root);
+  }
+
+  function updateWidget(root) {
+    if (!widgetHost) return;
+    const $ = (id) => root.getElementById(id);
+    $("msg").textContent = picking
+      ? (picking === "field" ? "Cliquez sur le champ code promo…" : picking === "opener" ? "Cliquez sur « Ajouter un code promo »…" : "Cliquez sur le total…")
+      : (state.message || "Prêt.");
+    $("best").textContent = state.best ? `Meilleur : ${state.best.code} → ${fmt(state.best.total)}` +
+      (state.baseline != null ? ` (−${fmt(state.baseline - state.best.total)})` : "") : "";
+    const setTag = (id, ok) => { const el = $(id); el.className = "tag " + (ok ? "ok" : "no"); };
+    setTag("tF", !!(state.field || findField()));
+    setTag("tO", !!(state.opener || findOpener()));
+    setTag("tT", !!state.totalEl);
+    $("go").style.display = state.running ? "none" : "block";
+    $("stop").style.display = state.running ? "block" : "none";
+  }
+
+  function unmountWidget() {
+    if (widgetTimer) { clearInterval(widgetTimer); widgetTimer = null; }
+    if (widgetHost) { widgetHost.remove(); widgetHost = null; }
   }
 
   /* ---------- découverte des codes présents dans la page ----------
@@ -449,6 +583,14 @@
         break;
       case "pickOpener":
         startPicking("opener");
+        sendResponse({ ok: true });
+        break;
+      case "showWidget":
+        mountWidget();
+        sendResponse({ ok: true });
+        break;
+      case "hideWidget":
+        unmountWidget();
         sendResponse({ ok: true });
         break;
       case "discover":

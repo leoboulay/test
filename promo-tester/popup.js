@@ -117,6 +117,10 @@ $("startBtn").addEventListener("click", async () => {
   } catch (e) { $("statusText").textContent = e.message; }
 });
 $("stopBtn").addEventListener("click", () => send("stop").catch((e) => ($("statusText").textContent = e.message)));
+$("widgetBtn").addEventListener("click", async () => {
+  try { await send("showWidget"); window.close(); }
+  catch (e) { $("statusText").textContent = e.message; }
+});
 $("discoverBtn").addEventListener("click", async () => {
   const btn = $("discoverBtn");
   const label = btn.textContent;
